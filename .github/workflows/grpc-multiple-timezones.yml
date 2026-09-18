@@ -1,0 +1,66 @@
+name: gRPC multiple timezone clients
+
+on:
+  push:
+    branches:
+      - review/grpc-multiple-timezones
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b
+        with:
+          python-version: "3.12"
+          enable-cache: true
+      - run: uv sync --group test --extra optional
+      - name: Run one server and three timezone clients
+        shell: bash
+        run: |
+          set -euxo pipefail
+          cat > server.py <<'PY'
+          import time
+          from optuna.storages import RDBStorage
+          from optuna.storages._grpc.server import make_server
+
+          server = make_server(RDBStorage("sqlite:///grpc_multiple_timezone_check.db"), "127.0.0.1", 13001)
+          server.start()
+          print("READY", flush=True)
+          time.sleep(60)
+          PY
+          cat > client.py <<'PY'
+          import os
+          from optuna.storages import GrpcStorageProxy
+          from optuna.study import StudyDirection
+          from optuna.trial import TrialState
+
+          zone = os.environ["CLIENT_ZONE"]
+          storage = GrpcStorageProxy(host="127.0.0.1", port=13001)
+          storage.wait_server_ready(timeout=10)
+          study_id = storage.create_new_study([StudyDirection.MINIMIZE], study_name=zone)
+          trial_id = storage.create_new_trial(study_id)
+          storage.set_trial_state_values(trial_id, TrialState.COMPLETE, [1.0])
+          trial = storage.get_trial(trial_id)
+          assert trial.datetime_start is not None
+          assert trial.datetime_complete is not None
+          print(zone, trial.datetime_start.isoformat(), trial.datetime_complete.isoformat())
+          storage.close()
+          PY
+          TZ=UTC uv run python server.py > server.log 2>&1 &
+          server_pid=$!
+          trap 'kill "$server_pid"' EXIT
+          for _ in $(seq 1 40); do
+            grep -q READY server.log && break
+            sleep 0.25
+          done
+          grep -q READY server.log
+          for entry in "Asia/Tokyo" "America/Los_Angeles" "UTC"; do
+            CLIENT_ZONE="$entry" TZ="$entry" uv run python client.py > "client-${entry//\//_}.log" 2>&1 &
+          done
+          wait
+          cat client-*.log
+          cat server.log
