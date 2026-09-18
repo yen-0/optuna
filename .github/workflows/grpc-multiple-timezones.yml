@@ -52,7 +52,7 @@ jobs:
           PY
           TZ=UTC uv run python server.py > server.log 2>&1 &
           server_pid=$!
-          trap 'kill "$server_pid"' EXIT
+          trap 'kill "$server_pid" 2>/dev/null || true' EXIT
           for _ in $(seq 1 40); do
             grep -q READY server.log && break
             sleep 0.25
