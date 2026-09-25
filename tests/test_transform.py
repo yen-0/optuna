@@ -227,6 +227,17 @@ def test_transform_untransform_params_at_bounds(
     assert trans_upper_param == distribution.high  # type: ignore
 
 
+@pytest.mark.parametrize("transform_log", [True, False])
+def test_untransform_nonstepped_float_returns_native_float(transform_log: bool) -> None:
+    distribution = FloatDistribution(0, 1)
+    trans = _SearchSpaceTransform({"x0": distribution}, transform_log)
+    trans_param = trans.bounds[0][1] + 1e-12
+
+    param = _untransform_numerical_param(trans_param, distribution, transform_log)
+
+    assert type(param) is float
+
+
 def test_untransform_numerical_param_int_uses_equal_width_bins() -> None:
     distribution = IntDistribution(0, 3)
 
