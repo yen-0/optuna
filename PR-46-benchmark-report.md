@@ -174,6 +174,26 @@ Measured effect: approximately **5–6.5x faster** in the isolated
 truncated-normal operations, contributing an estimated **25.6%** of the total
 study speedup.
 
+Representative diff:
+
+```diff
+-from optuna.samplers._tpe._erf import erf
++from optuna.samplers._tpe._erf import log_ndtr_negative as numpy_log_ndtr_negative
++from optuna.samplers._tpe._erf import ndtr_negative as numpy_ndtr_negative
+
+-def _log_ndtr(a: np.ndarray) -> np.ndarray:
+-    return np.frompyfunc(_log_ndtr_single, 1, 1)(a).astype(float)
++def _log_ndtr_negative(a: np.ndarray) -> np.ndarray:
++    if a.size < 300:
++        return np.asarray([_log_ndtr_negative_single(v) for v in a.ravel()])
++    return numpy_log_ndtr_negative(a)
+
+-def _ndtri_exp_single(y: float) -> float:
++def _ndtri_exp(y: np.ndarray) -> np.ndarray:
++    # Vectorized Newton iterations over the whole input array.
++    ...
+```
+
 ### 2. Batch candidate sampling
 
 Files: `_truncnorm.py`, `probability_distributions.py`
@@ -183,6 +203,23 @@ Files: `_truncnorm.py`, `probability_distributions.py`
 - Reduces Python-level dispatch and repeated broadcasting.
 
 Measured effect: Parzen sampling improved from **35.580 ms** to **5.142 ms**.
+
+Representative diff:
+
+```diff
+-ret = np.empty((batch_size, len(self.distributions)), dtype=np.float64)
+-for i in range(batch_size):
+-    ...
++active_indices = rng.choice(len(self.weights), p=self.weights, size=batch_size)
++active_mus = np.concatenate(
++    [d.mu[active_indices, np.newaxis] for d in self.distributions], axis=1
++)
++active_sigmas = np.concatenate(
++    [d.sigma[active_indices, np.newaxis] for d in self.distributions], axis=1
++)
++ret = _truncnorm.rvs(a=..., b=..., loc=active_mus, scale=active_sigmas,
++                     random_state=rng)
+```
 
 ### 3. Vectorize density evaluation
 
@@ -194,6 +231,27 @@ Files: `probability_distributions.py`, `_truncnorm.py`
 Measured effect: log-PDF evaluation improved from **813.626 ms** to
 **155.207 ms**, making it the largest estimated contributor at **71.2%**.
 
+Representative diff:
+
+```diff
+-weighted_log_pdf += _truncnorm.logpdf(
+-    x[:, np.newaxis, cont_inds],
+-    a=..., b=..., loc=mus_cont, scale=sigmas_cont,
+-).sum(axis=-1)
++weighted_log_pdf += _log_standard_norm_pdf(
++    (x[:, np.newaxis, cont_inds] - mus_cont) / sigmas_cont,
++    a=..., b=...,
++).sum(axis=-1) - np.log(sigmas_cont).sum(axis=-1)
+```
+
+The new helper is direct array arithmetic:
+
+```diff
++def _log_standard_norm_pdf(z, a, b):
++    return -(z**2) / 2.0 - _truncnorm._norm_pdf_logC \
++        - _truncnorm._log_gauss_mass(a, b)
+```
+
 ### 4. Vectorize Parzen-estimator construction
 
 File: `parzen_estimator.py`
@@ -204,6 +262,26 @@ File: `parzen_estimator.py`
 Measured effect: construction became **33% slower** in the isolated benchmark,
 but this phase is small relative to density evaluation and sampling.
 
+Representative diff:
+
+```diff
++mus, sigmas = _calculate_numerical_distributions(
++    transformed_observations,
++    lows=np.array([dist.low for dist in search_space.values()]),
++    highs=np.array([dist.high for dist in search_space.values()]),
++    steps=np.array([dist.step or 0.0 for dist in search_space.values()]),
++    multivariate=parameters.multivariate,
++    consider_endpoints=parameters.consider_endpoints,
++    consider_magic_clip=parameters.consider_magic_clip,
++    search_space_dim=len(search_space),
++)
+
+-self._calculate_distributions(
+-    transformed_observations[:, i], param, search_space[param], parameters
+-)
++_BatchedTruncNormDistributions(mus[:, i], sigmas[:, i], dist.low, dist.high)
+```
+
 ### 5. Batch numerical parameter preprocessing
 
 File: `sampler.py`
@@ -213,6 +291,21 @@ File: `sampler.py`
 
 This was not isolated as a separate timing, but it is expected to be a small
 contributor compared with density evaluation and truncated-normal operations.
+
+Representative diff:
+
+```diff
+-values: dict[str, list[float]] = {param_name: [] for param_name in search_space}
++values: list[list[float]] = [[] for _ in search_space]
+ ...
+-    param = trial.params[param_name]
+-    distribution = trial.distributions[param_name]
+-    values[param_name].append(distribution.to_internal_repr(param))
++    values[i].append(trial.params[param_name])
+ ...
++values_array = np.asarray(values)
++values_array[log_inds] = np.log(values_array[log_inds])
+```
 
 ## Correctness and coverage findings
 
