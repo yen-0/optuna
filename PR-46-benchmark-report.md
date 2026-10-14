@@ -162,6 +162,218 @@ generality and compatibility, while PR #46 pays less work per element.
 
 ## Changes grouped by goal
 
+## Chronological walkthrough of the PR-touched path
+
+This section follows one numerical TPE sampling request from start to finish.
+The goal is to show when each changed function is called and what data it
+produces.
+
+### 1. Collect observations: `sampler.py`
+
+The process begins in `TPESampler._sample`. The sampler has a search space and
+historical trials. It divides the trials into two groups:
+
+```text
+good trials → below model (l)
+bad trials  → above model (g)
+```
+
+For each group, the changed internal-representation logic collects numerical
+parameter values into arrays. Log-scaled numerical parameters are transformed
+with `np.log` in one batch.
+
+Relevant code:
+
+```text
+optuna/samplers/_tpe/sampler.py
+    TPESampler._sample
+    TPESampler._get_internal_repr
+```
+
+At the end of this step, the data is conceptually:
+
+```text
+observations_l = [values from good trials]
+observations_g = [values from bad trials]
+```
+
+### 2. Build the Parzen models: `parzen_estimator.py`
+
+`TPESampler._sample` creates one `_ParzenEstimator` for each group. The
+constructor transforms the observations into numerical distributions.
+
+```text
+_ParzenEstimator.__init__
+    ↓
+_calculate_numerical_distributions
+```
+
+For each numerical parameter, this calculates:
+
+- `mu` / `mus`: the centers of Gaussian kernels
+- `sigma` / `sigmas`: the widths of Gaussian kernels
+- the prior kernel centered at the middle of the search range
+
+For independent TPE, observations are sorted per dimension to determine local
+kernel widths. For multivariate TPE, widths are calculated from the complete
+search-space dimension.
+
+The result is a `_MixtureOfProductDistribution` containing one distribution
+per parameter dimension.
+
+Relevant code:
+
+```text
+optuna/samplers/_tpe/parzen_estimator.py
+    _ParzenEstimator.__init__
+    _calculate_numerical_distributions
+```
+
+### 3. Generate candidate values: `probability_distributions.py`
+
+The Parzen estimator's `sample` method asks its mixture distribution to
+generate candidates.
+
+```text
+_ParzenEstimator.sample
+    ↓
+_MixtureOfProductDistribution.sample
+```
+
+The mixture sampler first chooses which Gaussian component should generate
+each candidate using `rng`. It then gathers the selected `mus` and `sigmas`
+into arrays and samples all dimensions in a batch.
+
+For continuous parameters, the values come from truncated normal
+distributions. For discrete parameters, the continuous result is rounded to
+the parameter step and clipped to the valid range.
+
+Relevant code:
+
+```text
+optuna/samplers/_tpe/probability_distributions.py
+    _MixtureOfProductDistribution.sample
+    _BatchedTruncNormDistributions
+    _BatchedDiscreteTruncNormDistributions
+```
+
+### 4. Sample from a truncated normal: `_truncnorm.py`
+
+For a numerical parameter, the mixture sampler calls `_truncnorm.rvs`.
+
+```text
+_MixtureOfProductDistribution.sample
+    ↓
+_truncnorm.rvs
+    ↓
+_truncnorm.ppf
+```
+
+`rvs` generates uniform random quantiles. `ppf` converts those quantiles into
+values inside the interval `[a, b]`, where `a` and `b` are the normalized lower
+and upper bounds.
+
+`ppf` needs the Gaussian probability mass inside the interval, so it calls:
+
+```text
+_log_gauss_mass
+    ↓
+_log_ndtr_negative / _ndtr_negative
+```
+
+The PR changes this path from mostly scalar calculations to array-oriented
+calculations.
+
+Relevant code:
+
+```text
+optuna/samplers/_tpe/_truncnorm.py
+    rvs
+    ppf
+    _log_gauss_mass
+    _ndtri_exp
+```
+
+### 5. Compute normal CDF values: `_erf.py`
+
+The lowest-level numerical work computes the normal CDF or its logarithm.
+
+```text
+_truncnorm._ndtr_negative
+    ↓
+_erf.ndtr_negative
+
+_truncnorm._log_ndtr_negative
+    ↓
+_erf.log_ndtr_negative
+```
+
+These functions use piecewise approximations based on the magnitude of the
+input. The PR uses symmetry to focus on non-positive values, because the
+right-tail probability is more numerically stable when expressed through the
+left tail.
+
+The low-level implementation uses the rational approximations in `_erf.py` to
+evaluate `erf`, `erfc`, and related normal-CDF expressions without SciPy.
+
+Relevant code:
+
+```text
+optuna/samplers/_tpe/_erf.py
+    _ndtr_negative_non_big
+    ndtr_negative
+    _log_ndtr_negative
+    log_ndtr_negative
+```
+
+### 6. Score the candidates: `probability_distributions.py`
+
+After candidates are generated, the Parzen estimator evaluates their density.
+
+```text
+_ParzenEstimator.log_pdf
+    ↓
+_MixtureOfProductDistribution.log_pdf
+    ↓
+_log_standard_norm_pdf
+    ↓
+_truncnorm._log_gauss_mass
+```
+
+For each candidate, this computes how probable it is under the mixture model.
+The sampler evaluates both models:
+
+```text
+log l(x) - log g(x)
+```
+
+The candidate with the best ratio is selected. This density-evaluation stage
+is where the benchmark measured the largest contribution to the PR's speedup.
+
+### 7. Return the selected parameter set: `sampler.py`
+
+Finally, `TPESampler._sample` selects the best candidate according to the
+density ratio, converts internal numerical representations back to external
+parameter values, and returns the parameter dictionary to the trial.
+
+The complete numerical path is therefore:
+
+```text
+TPESampler._sample
+  → _get_internal_repr
+  → _ParzenEstimator.__init__
+  → _calculate_numerical_distributions
+  → _ParzenEstimator.sample
+  → _MixtureOfProductDistribution.sample
+  → _truncnorm.rvs
+  → _truncnorm.ppf
+  → _log_gauss_mass
+  → _erf.ndtr_negative / log_ndtr_negative
+  → _ParzenEstimator.log_pdf
+  → _MixtureOfProductDistribution.log_pdf
+  → select best candidate
+```
+
 ### 1. Vectorize Gaussian and truncated-normal math
 
 Files: `_erf.py`, `_truncnorm.py`
