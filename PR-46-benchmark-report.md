@@ -96,6 +96,30 @@ These are contribution estimates, not direct per-function timings from inside
 the whole-study run. The whole-study total is directly measured; the split is
 derived from the component benchmark.
 
+## Prototype comparison: vectorized `_log_ndtr`
+
+The proposed NumPy-only prototype was also benchmarked against the scalar base
+implementation and PR #46's vectorized implementation. Inputs were 100,000
+values uniformly distributed over `[-40, 0]`, which matches the non-positive
+domain used by the PR's tail implementation. Each result used five timed runs.
+
+| Implementation | Median time | Maximum absolute error vs. base |
+|---|---:|---:|
+| Base scalar `_log_ndtr` | 156.149 ms | 0.0 |
+| Proposed prototype | 23.273 ms | `1.14e-13` |
+| PR #46 vectorized implementation | 11.233 ms | 0.0 |
+
+Relative to the base implementation, the prototype is approximately **6.7x
+faster** while remaining numerically equivalent to about `1e-13` absolute error.
+However, on this non-positive input distribution it is approximately **2.1x
+slower than PR #46's implementation**. The prototype is therefore a strong
+vectorized replacement for the old scalar implementation, but it does not
+improve on the specialized negative-domain implementation currently used by
+PR #46.
+
+The prototype benchmark is implemented in
+`benchmarks/bench_log_ndtr_prototype.py`.
+
 ## Changes grouped by goal
 
 ### 1. Vectorize Gaussian and truncated-normal math
