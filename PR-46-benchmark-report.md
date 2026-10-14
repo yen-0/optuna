@@ -120,6 +120,46 @@ PR #46.
 The prototype benchmark is implemented in
 `benchmarks/bench_log_ndtr_prototype.py`.
 
+### Why the prototype has a small numerical error
+
+The prototype and the base implementation use the same mathematical
+piecewise scheme, but they do not perform every operation in the same order.
+The prototype evaluates the FreeBSD rational approximations with vectorized
+NumPy Horner operations, while the base implementation evaluates the
+corresponding scalar expression element by element. Floating-point rounding
+therefore differs slightly at branch boundaries and during the final `log`,
+`exp`, and subtraction operations.
+
+The maximum observed absolute difference was `1.14e-13`, which is consistent
+with ordinary double-precision round-off. This is not an accumulated error or
+an instability observed in the tested range. It should nevertheless be
+validated with the full tail and boundary test suite before replacing the
+existing implementation.
+
+The PR implementation was reported with zero error only because the PR
+implementation itself was used as the reference for that run; that value does
+not prove that it is mathematically exact.
+
+### Why the prototype loses to PR #46
+
+The prototype is faster than the old scalar implementation but slower than
+PR #46 because the two implementations optimize different scopes:
+
+| Difference | Effect |
+|---|---|
+| Prototype supports all three scalar branches (`a > 6`, `-20 < a <= 6`, and `a <= -20`) | More work than PR #46's negative-domain-only path |
+| Prototype computes `_ndtr_vec` through `_erfc_pos` and multiple Horner evaluations | Additional polynomial evaluation and temporary arrays |
+| Prototype uses `searchsorted` plus several boolean masks | Extra classification and indexing overhead |
+| Prototype iterates the asymptotic tail with an active mask | General per-element convergence handling adds loop overhead |
+| PR #46 first exploits symmetry and only evaluates non-positive values | Avoids the positive-side branches entirely |
+| PR #46 uses `count_nonzero` binning and direct specialized formulas | Fewer masks and fewer intermediate arrays |
+
+In short, the prototype is a general drop-in replacement for the old
+three-branch scalar function, whereas PR #46 is a narrower implementation
+specialized for the way TPE calls it. The prototype's approximately 23.3 ms
+runtime versus PR #46's 11.2 ms is therefore expected: the prototype pays for
+generality and compatibility, while PR #46 pays less work per element.
+
 ## Changes grouped by goal
 
 ### 1. Vectorize Gaussian and truncated-normal math
