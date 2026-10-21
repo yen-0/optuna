@@ -75,31 +75,24 @@ The complete study saved **5.304 ms per trial**. The following allocation uses
 the relative component improvements to estimate how that observed whole-study
 saving is divided among PR goals.
 
-| Goal | 概要（日本語） | 変更した関数と変更内容（日本語） | Estimated saving per trial | Estimated saving over 100 trials | Contribution |
-|---|---|---|---:|---:|---:|
-| Density/log-PDF: high-level batching | 候補点を `l(x)` / `g(x)` の下で評価する高レベル処理を高速化。 | `probability_distributions.py` の `_MixtureOfProductDistribution.log_pdf` で、汎用的な `_truncnorm.logpdf` の呼び出しを、`_log_standard_norm_pdf` による複数候補・複数次元の NumPy 配列演算へ置き換え。 | 一部分（単独未計測） | 一部分（単独未計測） | density 合計に含む |
-| Density/log-PDF: Gaussian mass/CDF | truncated normal の正規化確率と正規分布 CDF の計算を高速化。 | `_truncnorm.py` の `_log_gauss_mass` と `_log_ndtr_negative` / `_ndtr_negative`、および `_erf.py` の CDF 近似をベクトル化。 | 一部分（単独未計測） | 一部分（単独未計測） | density 合計に含む |
-| Truncated-normal/vectorized sampling | パラメータ範囲内の切断正規分布から、候補となるパラメータ値をまとめて生成する処理をベクトル化。 | `_truncnorm.py` の `_ndtri_exp`、`ppf`、`rvs` と `_erf.py` の `ndtr_negative` / `log_ndtr_negative` を配列入力対応に変更。Python のスカラー処理を、NumPy の配列演算・マスク処理・ベクトル化 Newton 反復に置き換え。 | 1.36 ms | 0.136 s | **25.6%** |
-| Sampling orchestration | どの混合分布成分から候補を生成するかを選び、各次元のサンプルを組み立てる処理のオーバーヘッドを削減。 | `probability_distributions.py` の `_MixtureOfProductDistribution.sample` で、候補ごとのループを削減。`rng.choice` で選んだ成分の `mu` / `sigma` を配列にまとめ、一括で `_truncnorm.rvs` を呼び出すように変更。 | 0.17 ms | 0.017 s | **3.3%** |
-| Parzen construction | 過去の good/bad 試行から、各パラメータの `mu` と `sigma` を計算して Parzen モデルを構築する処理。 | `parzen_estimator.py` に `_calculate_numerical_distributions` を追加し、`mu` / `sigma` の計算をパラメータごとの処理からまとめた配列処理へ変更。`sampler.py` の `_get_internal_repr` でも観測値と log 変換を配列化。ただし構築単体では 33% 遅くなった。 | -0.002 ms | -0.0002 s | **-0.05%** |
-| **Total** | **5.30 ms** | **0.530 s** | **100%** |
+| Goal（排他的な測定単位） | 概要（日本語） | 変更した関数と変更内容（日本語） | Component saving | Normalized contribution |
+|---|---|---|---:|---:|
+| Candidate log-PDF evaluation（内部の CDF 計算を含む） | 候補点を `l(x)` / `g(x)` の下で評価する排他的な処理区間。 | `_MixtureOfProductDistribution.log_pdf`、`_log_standard_norm_pdf`、`_log_gauss_mass`、`_log_ndtr_negative` / `_ndtr_negative`、`_erf.py` の CDF 計算をすべてこの区間に含める。 | **658.419 ms** | **95.6%** |
+| Candidate sampling（内部の `rvs` / `ppf` / `_erf` を含む） | `l(x)` から候補点を生成する排他的な処理区間。 | `_MixtureOfProductDistribution.sample`、`_truncnorm.rvs`、`ppf`、`_ndtri_exp`、`_erf.py` の計算をまとめて含める。 | **30.438 ms** | **4.4%** |
+| Parzen construction（観測値の前処理を含む） | 過去の good/bad 試行から `mu` と `sigma` を計算してモデルを構築する排他的な処理区間。 | `parzen_estimator.py` の `_calculate_numerical_distributions` と `sampler.py` の `_get_internal_repr` を含める。ただし構築単体では遅くなった。 | **-0.435 ms** | **-0.06%** |
+| **合計** | 各処理区間を重複なく合計。 | `ppf`、`rvs`、`_erf` は親の処理区間に含め、別行では計上しない。 | **688.422 ms** | **100.0%** |
+The detailed functions such as `ppf`, `rvs`, and `_erf.py` are assigned to
+their containing phase and are not counted again. The three phases are
+therefore mutually exclusive and sum to **100%** of the component benchmark
+improvement:
 
-The truncated-normal `rvs` benchmark is part of candidate sampling, so those
-measurements are not independent and must not be added twice. The non-overlap
-interpretation is approximately:
+- Candidate log-PDF evaluation: **95.6%**.
+- Candidate sampling: **4.4%**.
+- Parzen construction: **-0.06%**, representing a small regression.
 
-- Density evaluation: **71%** of the improvement.
-- Truncated-normal/vectorized sampling: **26%**.
-- Sampling orchestration: **3%**.
-- Parzen construction: effectively neutral, with a small regression.
-
-These are contribution estimates, not direct per-function timings from inside
-the whole-study run. The whole-study total is directly measured; the split is
-derived from the component benchmark. The two density/log-PDF rows are
-intentionally shown separately for understanding, but their contributions
-cannot be added independently: the low-level Gaussian-mass/CDF work is called
-by the high-level density evaluation. Their combined measured contribution is
-**71.2%**.
+These are component-level contributions. The complete-study total is measured
+separately, while the component split is derived from the three non-overlapping
+component timings.
 
 ## Prototype comparison: vectorized `_log_ndtr`
 
