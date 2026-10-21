@@ -77,7 +77,8 @@ saving is divided among PR goals.
 
 | Goal | 概要（日本語） | 変更した関数と変更内容（日本語） | Estimated saving per trial | Estimated saving over 100 trials | Contribution |
 |---|---|---|---:|---:|---:|
-| Density/log-PDF evaluation | 候補点が good/bad のモデル `l(x)` と `g(x)` の下でどれだけ尤もらしいかを、対数確率密度で評価する処理を高速化。 | `probability_distributions.py` の `_MixtureOfProductDistribution.log_pdf` で、`_truncnorm.logpdf` の呼び出しを、`_log_standard_norm_pdf` による NumPy 配列演算へ置き換え。候補点を1点ずつ処理する形から、複数候補・複数次元をまとめて計算する形に変更。 | 3.78 ms | 0.378 s | **71.2%** |
+| Density/log-PDF: high-level batching | 候補点を `l(x)` / `g(x)` の下で評価する高レベル処理を高速化。 | `probability_distributions.py` の `_MixtureOfProductDistribution.log_pdf` で、汎用的な `_truncnorm.logpdf` の呼び出しを、`_log_standard_norm_pdf` による複数候補・複数次元の NumPy 配列演算へ置き換え。 | 一部分（単独未計測） | 一部分（単独未計測） | density 合計に含む |
+| Density/log-PDF: Gaussian mass/CDF | truncated normal の正規化確率と正規分布 CDF の計算を高速化。 | `_truncnorm.py` の `_log_gauss_mass` と `_log_ndtr_negative` / `_ndtr_negative`、および `_erf.py` の CDF 近似をベクトル化。 | 一部分（単独未計測） | 一部分（単独未計測） | density 合計に含む |
 | Truncated-normal/vectorized sampling | パラメータ範囲内の切断正規分布から、候補となるパラメータ値をまとめて生成する処理をベクトル化。 | `_truncnorm.py` の `_ndtri_exp`、`ppf`、`rvs` と `_erf.py` の `ndtr_negative` / `log_ndtr_negative` を配列入力対応に変更。Python のスカラー処理を、NumPy の配列演算・マスク処理・ベクトル化 Newton 反復に置き換え。 | 1.36 ms | 0.136 s | **25.6%** |
 | Sampling orchestration | どの混合分布成分から候補を生成するかを選び、各次元のサンプルを組み立てる処理のオーバーヘッドを削減。 | `probability_distributions.py` の `_MixtureOfProductDistribution.sample` で、候補ごとのループを削減。`rng.choice` で選んだ成分の `mu` / `sigma` を配列にまとめ、一括で `_truncnorm.rvs` を呼び出すように変更。 | 0.17 ms | 0.017 s | **3.3%** |
 | Parzen construction | 過去の good/bad 試行から、各パラメータの `mu` と `sigma` を計算して Parzen モデルを構築する処理。 | `parzen_estimator.py` に `_calculate_numerical_distributions` を追加し、`mu` / `sigma` の計算をパラメータごとの処理からまとめた配列処理へ変更。`sampler.py` の `_get_internal_repr` でも観測値と log 変換を配列化。ただし構築単体では 33% 遅くなった。 | -0.002 ms | -0.0002 s | **-0.05%** |
@@ -94,7 +95,11 @@ interpretation is approximately:
 
 These are contribution estimates, not direct per-function timings from inside
 the whole-study run. The whole-study total is directly measured; the split is
-derived from the component benchmark.
+derived from the component benchmark. The two density/log-PDF rows are
+intentionally shown separately for understanding, but their contributions
+cannot be added independently: the low-level Gaussian-mass/CDF work is called
+by the high-level density evaluation. Their combined measured contribution is
+**71.2%**.
 
 ## Prototype comparison: vectorized `_log_ndtr`
 
@@ -433,7 +438,7 @@ Representative diff:
 +                     random_state=rng)
 ```
 
-### 3. Vectorize density evaluation
+### 3a. Batch the high-level density evaluation
 
 Files: `probability_distributions.py`, `_truncnorm.py`
 
@@ -463,6 +468,17 @@ The new helper is direct array arithmetic:
 +    return -(z**2) / 2.0 - _truncnorm._norm_pdf_logC \
 +        - _truncnorm._log_gauss_mass(a, b)
 ```
+
+### 3b. Vectorize Gaussian mass and CDF calculations
+
+The high-level density calculation depends on lower-level probability
+calculations. `_log_gauss_mass` calculates the probability mass used to
+normalize a truncated normal. It calls `_log_ndtr_negative` or
+`_ndtr_negative`, which use the piecewise approximations in `_erf.py`.
+
+This is a separate implementation goal from batching `log_pdf`, but its
+runtime is included in the same measured log-PDF result. It is therefore
+reported as a sub-contribution rather than added as an independent speedup.
 
 ### 4. Vectorize Parzen-estimator construction
 
