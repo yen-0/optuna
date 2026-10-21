@@ -75,12 +75,12 @@ The complete study saved **5.304 ms per trial**. The following allocation uses
 the relative component improvements to estimate how that observed whole-study
 saving is divided among PR goals.
 
-| Goal | Estimated saving per trial | Estimated saving over 100 trials | Contribution |
-|---|---:|---:|---:|
-| Density/log-PDF evaluation | 3.78 ms | 0.378 s | **71.2%** |
-| Truncated-normal/vectorized sampling | 1.36 ms | 0.136 s | **25.6%** |
-| Sampling orchestration | 0.17 ms | 0.017 s | **3.3%** |
-| Parzen construction | -0.002 ms | -0.0002 s | **-0.05%** |
+| Goal | 概要（日本語） | Estimated saving per trial | Estimated saving over 100 trials | Contribution |
+|---|---|---:|---:|---:|
+| Density/log-PDF evaluation | 候補点が good/bad のモデル `l(x)` と `g(x)` の下でどれだけ尤もらしいかを、対数確率密度で評価する処理を高速化。 | 3.78 ms | 0.378 s | **71.2%** |
+| Truncated-normal/vectorized sampling | パラメータ範囲内の切断正規分布から、候補となるパラメータ値をまとめて生成する処理をベクトル化。 | 1.36 ms | 0.136 s | **25.6%** |
+| Sampling orchestration | どの混合分布成分から候補を生成するかを選び、各次元のサンプルを組み立てる処理のオーバーヘッドを削減。 | 0.17 ms | 0.017 s | **3.3%** |
+| Parzen construction | 過去の good/bad 試行から、各パラメータの `mu` と `sigma` を計算して Parzen モデルを構築する処理。 | -0.002 ms | -0.0002 s | **-0.05%** |
 | **Total** | **5.30 ms** | **0.530 s** | **100%** |
 
 The truncated-normal `rvs` benchmark is part of candidate sampling, so those
