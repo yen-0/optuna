@@ -75,12 +75,12 @@ The complete study saved **5.304 ms per trial**. The following allocation uses
 the relative component improvements to estimate how that observed whole-study
 saving is divided among PR goals.
 
-| Goal | 概要（日本語） | Estimated saving per trial | Estimated saving over 100 trials | Contribution |
-|---|---|---:|---:|---:|
-| Density/log-PDF evaluation | 候補点が good/bad のモデル `l(x)` と `g(x)` の下でどれだけ尤もらしいかを、対数確率密度で評価する処理を高速化。 | 3.78 ms | 0.378 s | **71.2%** |
-| Truncated-normal/vectorized sampling | パラメータ範囲内の切断正規分布から、候補となるパラメータ値をまとめて生成する処理をベクトル化。 | 1.36 ms | 0.136 s | **25.6%** |
-| Sampling orchestration | どの混合分布成分から候補を生成するかを選び、各次元のサンプルを組み立てる処理のオーバーヘッドを削減。 | 0.17 ms | 0.017 s | **3.3%** |
-| Parzen construction | 過去の good/bad 試行から、各パラメータの `mu` と `sigma` を計算して Parzen モデルを構築する処理。 | -0.002 ms | -0.0002 s | **-0.05%** |
+| Goal | 概要（日本語） | 変更した関数と変更内容（日本語） | Estimated saving per trial | Estimated saving over 100 trials | Contribution |
+|---|---|---|---:|---:|---:|
+| Density/log-PDF evaluation | 候補点が good/bad のモデル `l(x)` と `g(x)` の下でどれだけ尤もらしいかを、対数確率密度で評価する処理を高速化。 | `probability_distributions.py` の `_MixtureOfProductDistribution.log_pdf` で、`_truncnorm.logpdf` の呼び出しを、`_log_standard_norm_pdf` による NumPy 配列演算へ置き換え。候補点を1点ずつ処理する形から、複数候補・複数次元をまとめて計算する形に変更。 | 3.78 ms | 0.378 s | **71.2%** |
+| Truncated-normal/vectorized sampling | パラメータ範囲内の切断正規分布から、候補となるパラメータ値をまとめて生成する処理をベクトル化。 | `_truncnorm.py` の `_ndtri_exp`、`ppf`、`rvs` と `_erf.py` の `ndtr_negative` / `log_ndtr_negative` を配列入力対応に変更。Python のスカラー処理を、NumPy の配列演算・マスク処理・ベクトル化 Newton 反復に置き換え。 | 1.36 ms | 0.136 s | **25.6%** |
+| Sampling orchestration | どの混合分布成分から候補を生成するかを選び、各次元のサンプルを組み立てる処理のオーバーヘッドを削減。 | `probability_distributions.py` の `_MixtureOfProductDistribution.sample` で、候補ごとのループを削減。`rng.choice` で選んだ成分の `mu` / `sigma` を配列にまとめ、一括で `_truncnorm.rvs` を呼び出すように変更。 | 0.17 ms | 0.017 s | **3.3%** |
+| Parzen construction | 過去の good/bad 試行から、各パラメータの `mu` と `sigma` を計算して Parzen モデルを構築する処理。 | `parzen_estimator.py` に `_calculate_numerical_distributions` を追加し、`mu` / `sigma` の計算をパラメータごとの処理からまとめた配列処理へ変更。`sampler.py` の `_get_internal_repr` でも観測値と log 変換を配列化。ただし構築単体では 33% 遅くなった。 | -0.002 ms | -0.0002 s | **-0.05%** |
 | **Total** | **5.30 ms** | **0.530 s** | **100%** |
 
 The truncated-normal `rvs` benchmark is part of candidate sampling, so those
