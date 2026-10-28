@@ -1,6 +1,9 @@
 name: CDF benchmark
 
 on:
+  push:
+    branches:
+      - cdf-benchmark-run
   workflow_dispatch:
     inputs:
       master_ref:
