@@ -1,0 +1,70 @@
+name: CDF benchmark
+
+on:
+  workflow_dispatch:
+    inputs:
+      master_ref:
+        description: "Baseline ref"
+        required: true
+        default: "master"
+      author_ref:
+        description: "Author vectorize ref"
+        required: true
+        default: "benchmark/pr46"
+      nabenabe_ref:
+        description: "nabenabe-san ref"
+        required: true
+        default: "research/vectorize-truncnorm"
+
+jobs:
+  benchmark:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout benchmark runner
+        uses: actions/checkout@v4
+        with:
+          path: runner
+
+      - name: Checkout baseline
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.master_ref }}
+          path: candidate-master
+
+      - name: Checkout author implementation
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.author_ref }}
+          path: candidate-author
+
+      - name: Checkout nabenabe implementation
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.nabenabe_ref }}
+          path: candidate-nabenabe
+
+      - name: Install benchmark dependencies
+        run: python -m pip install --upgrade numpy
+
+      - name: Run CDF benchmark
+        env:
+          OMP_NUM_THREADS: "1"
+          OPENBLAS_NUM_THREADS: "1"
+          MKL_NUM_THREADS: "1"
+          NUMEXPR_NUM_THREADS: "1"
+        run: >-
+          python runner/cdf_benchmark.py
+          --size 1000000
+          --repeats 50
+          --warmup 10
+          --repo master candidate-master
+          --repo author-vectorize candidate-author
+          --repo nabenabe candidate-nabenabe
+          > cdf-benchmark-results.json
+
+      - name: Upload raw benchmark results
+        uses: actions/upload-artifact@v4
+        with:
+          name: cdf-benchmark-results
+          path: cdf-benchmark-results.json
