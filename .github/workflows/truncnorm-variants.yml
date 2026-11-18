@@ -1,0 +1,27 @@
+name: Truncated-normal variant benchmark
+
+on:
+  workflow_dispatch:
+
+jobs:
+  benchmark:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install dependencies
+        run: python -m pip install --upgrade pip numpy && python -m pip install -e .
+      - name: Run 36-case benchmark
+        env:
+          RESULTS_FILE: truncnorm-results.csv
+        run: python benchmarks/truncnorm_variants.py | tee truncnorm-output.log
+      - name: Upload benchmark results
+        uses: actions/upload-artifact@v4
+        with:
+          name: truncnorm-variant-results
+          path: |
+            truncnorm-results.csv
+            truncnorm-output.log
